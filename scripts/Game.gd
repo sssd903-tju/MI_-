@@ -911,7 +911,7 @@ func _update_mi_bridge(delta: float) -> void:
 			mi_status_send_cooldown = MI_STATUS_SEND_INTERVAL
 			var status_payload: Dictionary = {
 				"type": "mi_status",
-				"timestamp_ms": Time.get_ticks_msec(),
+				"timestamp_ms": int(Time.get_unix_time_from_system() * 1000.0),
 				"score": score,
 				"airborne": player.is_airborne,
 				"charging": player.is_charging,
@@ -954,8 +954,8 @@ func _process_mi_packet(raw_text: String) -> void:
 			return
 	mi_last_seq = seq
 
-	var ts_ms: int = int(data.get("timestamp_ms", Time.get_ticks_msec()))
-	var now_ms: int = Time.get_ticks_msec()
+	var now_ms: int = int(Time.get_unix_time_from_system() * 1000.0)
+	var ts_ms: int = int(data.get("timestamp_ms", now_ms))
 	if abs(now_ms - ts_ms) > MI_PACKET_TTL_MS:
 		mi_stale_dropped += 1
 		return
