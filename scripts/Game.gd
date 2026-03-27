@@ -61,6 +61,7 @@ const MI_FOOT_CONFIRM_COUNT: int = 2
 const MI_KEEPALIVE_TIMEOUT: float = 0.7
 const MI_ACTION_COOLDOWN: float = 0.12
 const MI_AIR_JUMP_COOLDOWN: float = 0.2
+const MI_STATUS_SEND_INTERVAL: float = 0.1
 
 enum GameState {
 	START,
@@ -179,6 +180,7 @@ var mi_cancel_count: int = 0
 var mi_air_jump_count: int = 0
 var mi_action_count: int = 0
 var mi_latency_ms_ema: float = 0.0
+var mi_status_send_cooldown: float = 0.0
 
 var i18n: Dictionary = {
 	"zh": {
@@ -899,6 +901,20 @@ func _update_mi_bridge(delta: float) -> void:
 		while mi_ws.get_available_packet_count() > 0:
 			var packet: PackedByteArray = mi_ws.get_packet()
 			_process_mi_packet(packet.get_string_from_utf8())
+		mi_status_send_cooldown -= delta
+		if mi_status_send_cooldown <= 0.0:
+			mi_status_send_cooldown = MI_STATUS_SEND_INTERVAL
+			var status_payload: Dictionary = {
+				"type": "mi_status",
+				"timestamp_ms": Time.get_ticks_msec(),
+				"score": score,
+				"airborne": player.is_airborne,
+				"charging": player.is_charging,
+				"mi_state": mi_state,
+				"control_mode": current_control_mode,
+				"mi_input_mode": current_mi_input_mode
+			}
+			mi_ws.send_text(JSON.stringify(status_payload))
 		return
 
 	if state == WebSocketPeer.STATE_CONNECTING:
@@ -978,6 +994,7 @@ func _reset_mi_runtime_state() -> void:
 	mi_raw_streak = 0
 	mi_decision_label = "none"
 	input_action_pending = InputAction.NONE
+	mi_status_send_cooldown = 0.0
 	player.cancel_charge()
 	player.always_show_charge_bar = current_control_mode == ControlMode.MANUAL
 
