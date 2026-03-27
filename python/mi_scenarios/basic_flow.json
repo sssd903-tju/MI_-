@@ -1,0 +1,14 @@
+[
+  {"wait_s": 0.2, "label": "rest", "confidence": 1.0},
+  {"wait_s": 0.15, "label": "hand", "confidence": 0.85},
+  {"wait_s": 0.15, "label": "hand", "confidence": 0.9},
+  {"wait_s": 0.15, "label": "hand", "confidence": 0.92},
+  {"wait_s": 0.12, "label": "rest", "confidence": 1.0},
+  {"wait_s": 0.12, "label": "rest", "confidence": 1.0},
+  {"wait_s": 0.12, "label": "hand", "confidence": 0.88},
+  {"wait_s": 0.12, "label": "hand", "confidence": 0.9},
+  {"wait_s": 0.12, "label": "foot", "confidence": 0.93},
+  {"wait_s": 0.35, "label": "rest", "confidence": 1.0},
+  {"wait_s": 0.2, "label": "foot", "confidence": 0.9},
+  {"wait_s": 0.4, "label": "rest", "confidence": 1.0}
+]
