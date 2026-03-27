@@ -19,7 +19,7 @@ class RawInput:
     def __enter__(self):
         self.fd = sys.stdin.fileno()
         self.old_settings = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
+        tty.setraw(self.fd)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -45,21 +45,28 @@ def build_packet(seq: int, label: str, confidence: float, key: str, delta_ms: in
 
 
 async def _game_receiver(websocket) -> None:
+    last_print_ms = 0
+    last_state = None
     try:
         async for raw in websocket:
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
-                print(f"[GAME] {raw}")
+                print(f"\n[GAME] {raw}", flush=True)
                 continue
 
             if isinstance(payload, dict):
                 score = payload.get("score", "-")
                 airborne = payload.get("airborne", "-")
                 mi_state = payload.get("mi_state", "-")
-                print(f"[GAME] score={score} airborne={airborne} mi_state={mi_state}")
+                now_ms = int(time.time() * 1000)
+                state_tuple = (score, airborne, mi_state)
+                if state_tuple != last_state or now_ms - last_print_ms >= 500:
+                    print(f"\n[GAME] score={score} airborne={airborne} mi_state={mi_state}", flush=True)
+                    last_print_ms = now_ms
+                    last_state = state_tuple
             else:
-                print(f"[GAME] {payload}")
+                print(f"\n[GAME] {payload}", flush=True)
     except websockets.exceptions.ConnectionClosed:
         pass
 
@@ -69,6 +76,7 @@ async def keyboard_sender(websocket) -> None:
     print("hotkeys: h=hand, f=foot, r=rest, q=quit")
     print("confidence: + / - adjust step=0.05, c show current")
     print("optional command mode: type ':h 0.85' then Enter")
+    print("ready: press h/f/r directly", flush=True)
 
     seq = 0
     confidence_hand = 0.9
@@ -86,6 +94,9 @@ async def keyboard_sender(websocket) -> None:
             ch = os.read(raw.fd, 1).decode("utf-8", errors="ignore")
             if not ch:
                 continue
+            if ch == "\x03":
+                print("\nquit (ctrl-c)", flush=True)
+                break
 
             if command_buffer:
                 if ch in ("\r", "\n"):
@@ -102,23 +113,23 @@ async def keyboard_sender(websocket) -> None:
                             continue
                         if parts[0] == "h":
                             confidence_hand = cmd_conf
-                            print(f"hand confidence set to {confidence_hand:.2f}")
+                            print(f"\nhand confidence set to {confidence_hand:.2f}", flush=True)
                         elif parts[0] == "f":
                             confidence_foot = cmd_conf
-                            print(f"foot confidence set to {confidence_foot:.2f}")
+                            print(f"\nfoot confidence set to {confidence_foot:.2f}", flush=True)
                         else:
                             now_ms = int(time.time() * 1000)
                             delta_ms = now_ms - last_event_ms
                             last_event_ms = now_ms
                             seq += 1
                             await websocket.send(build_packet(seq, "rest", 1.0, "r", delta_ms))
-                            print(f"sent #{seq}: rest conf=1.00 dt={delta_ms}ms")
+                            print(f"\nsent #{seq}: rest conf=1.00 dt={delta_ms}ms", flush=True)
                     else:
-                        print("command format: :h 0.85 / :f 0.80 / :r 1.0")
+                        print("\ncommand format: :h 0.85 / :f 0.80 / :r 1.0", flush=True)
                     continue
                 if ch == "\x1b":
                     command_buffer = ""
-                    print("command canceled")
+                    print("\ncommand canceled", flush=True)
                     continue
                 command_buffer += ch
                 continue
@@ -126,23 +137,23 @@ async def keyboard_sender(websocket) -> None:
             lower = ch.lower()
             if lower == ":":
                 command_buffer = ""
-                print("command mode")
+                print("\ncommand mode", flush=True)
                 continue
             if lower == "q":
-                print("quit")
+                print("\nquit", flush=True)
                 break
             if lower == "+":
                 confidence_hand = min(1.0, confidence_hand + 0.05)
                 confidence_foot = min(1.0, confidence_foot + 0.05)
-                print(f"conf hand={confidence_hand:.2f} foot={confidence_foot:.2f}")
+                print(f"\nconf hand={confidence_hand:.2f} foot={confidence_foot:.2f}", flush=True)
                 continue
             if lower == "-":
                 confidence_hand = max(0.0, confidence_hand - 0.05)
                 confidence_foot = max(0.0, confidence_foot - 0.05)
-                print(f"conf hand={confidence_hand:.2f} foot={confidence_foot:.2f}")
+                print(f"\nconf hand={confidence_hand:.2f} foot={confidence_foot:.2f}", flush=True)
                 continue
             if lower == "c":
-                print(f"conf hand={confidence_hand:.2f} foot={confidence_foot:.2f}")
+                print(f"\nconf hand={confidence_hand:.2f} foot={confidence_foot:.2f}", flush=True)
                 continue
 
             label = ""
@@ -165,7 +176,7 @@ async def keyboard_sender(websocket) -> None:
 
             seq += 1
             await websocket.send(build_packet(seq, label, confidence, lower, delta_ms))
-            print(f"sent #{seq}: {label} conf={confidence:.2f} dt={delta_ms}ms")
+            print(f"\nsent #{seq}: {label} conf={confidence:.2f} dt={delta_ms}ms", flush=True)
 
 
 async def main() -> None:
