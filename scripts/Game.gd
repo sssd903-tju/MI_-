@@ -919,6 +919,8 @@ func _update_mi_bridge(delta: float) -> void:
 	var state: WebSocketPeer.State = mi_ws.get_ready_state()
 	if state == WebSocketPeer.STATE_OPEN:
 		mi_ws.poll()
+		if mi_ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			return
 		while mi_ws.get_available_packet_count() > 0:
 			var packet: PackedByteArray = mi_ws.get_packet()
 			_process_mi_packet(packet.get_string_from_utf8())
@@ -935,7 +937,12 @@ func _update_mi_bridge(delta: float) -> void:
 				"control_mode": current_control_mode,
 				"mi_input_mode": current_mi_input_mode
 			}
-			mi_ws.send_text(JSON.stringify(status_payload))
+			if mi_ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+				var send_result: int = mi_ws.send_text(JSON.stringify(status_payload))
+				if send_result != OK:
+					mi_reconnect_cooldown = 0.0
+					if mi_ws.get_ready_state() != WebSocketPeer.STATE_CLOSED:
+						mi_ws.close()
 		return
 
 	if state == WebSocketPeer.STATE_CONNECTING:
