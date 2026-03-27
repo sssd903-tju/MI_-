@@ -512,7 +512,7 @@ func _consume_input_action() -> void:
 	input_action_pending = InputAction.NONE
 
 	var now_sec: float = Time.get_ticks_msec() / 1000.0
-	if action != InputAction.AIR_JUMP and now_sec - mi_last_action_time < MI_ACTION_COOLDOWN:
+	if current_control_mode == ControlMode.MI and action != InputAction.AIR_JUMP and now_sec - mi_last_action_time < MI_ACTION_COOLDOWN:
 		return
 
 	if action == InputAction.START_CHARGE:
@@ -540,8 +540,9 @@ func _consume_input_action() -> void:
 		else:
 			mi_invalid_action_count += 1
 
-	mi_action_count += 1
-	mi_last_action_time = now_sec
+	if current_control_mode == ControlMode.MI:
+		mi_action_count += 1
+		mi_last_action_time = now_sec
 
 func _physics_process(delta: float) -> void:
 	if wait_for_accept_release:
@@ -610,11 +611,15 @@ func _physics_process(delta: float) -> void:
 		_ensure_ground_support()
 
 	if current_control_mode == ControlMode.MANUAL:
-		_poll_manual_action()
+		if not player.is_airborne:
+			if Input.is_action_pressed("ui_accept"):
+				player.begin_charge()
+			if Input.is_action_just_released("ui_accept"):
+				if player.release_jump():
+					_register_jump_combo()
 	else:
 		_poll_mi_action(delta)
-
-	_consume_input_action()
+		_consume_input_action()
 
 	if player.is_charging and not full_charge_cue_played and player.charge_ratio() >= 0.995:
 		_play_charge_ready_sfx()
@@ -929,6 +934,7 @@ func _update_mi_bridge(delta: float) -> void:
 	if mi_ws.get_ready_state() != WebSocketPeer.STATE_CLOSED:
 		mi_ws.close()
 	mi_ws = WebSocketPeer.new()
+	mi_last_seq = -1
 	var target_url: String = MI_OFFLINE_WS_URL if current_mi_input_mode == MIInputMode.OFFLINE else MI_ONLINE_WS_URL
 	mi_ws.connect_to_url(target_url)
 
@@ -940,8 +946,12 @@ func _process_mi_packet(raw_text: String) -> void:
 
 	var seq: int = int(data.get("seq", -1))
 	if seq <= mi_last_seq:
-		mi_out_of_order_dropped += 1
-		return
+		# Allow sender restart in offline tests where sequence often resets to 1.
+		if seq == 1:
+			mi_last_seq = 0
+		else:
+			mi_out_of_order_dropped += 1
+			return
 	mi_last_seq = seq
 
 	var ts_ms: int = int(data.get("timestamp_ms", Time.get_ticks_msec()))
@@ -973,11 +983,22 @@ func _process_mi_signal(label: String, confidence: float) -> void:
 		mi_raw_label = effective_label
 		mi_raw_streak = 1
 
-	var needed: int = MI_HAND_CONFIRM_COUNT if effective_label == "hand" else MI_FOOT_CONFIRM_COUNT
+	var needed: int = _mi_needed_count(effective_label)
 	if effective_label == "rest":
 		needed = 1
 	if mi_raw_streak >= needed and mi_decision_label != effective_label:
 		mi_decision_label = effective_label
+
+func _mi_needed_count(effective_label: String) -> int:
+	if effective_label == "rest":
+		return 1
+	if current_mi_input_mode == MIInputMode.OFFLINE:
+		return 1
+	if effective_label == "hand":
+		return MI_HAND_CONFIRM_COUNT
+	if effective_label == "foot":
+		return MI_FOOT_CONFIRM_COUNT
+	return 1
 
 func _mi_reset_decision_tracking() -> void:
 	mi_decision_label = "none"
