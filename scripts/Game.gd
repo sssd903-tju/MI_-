@@ -62,6 +62,9 @@ const MI_KEEPALIVE_TIMEOUT: float = 0.7
 const MI_ACTION_COOLDOWN: float = 0.12
 const MI_AIR_JUMP_COOLDOWN: float = 0.2
 const MI_STATUS_SEND_INTERVAL: float = 0.1
+const MANUAL_MAX_CHARGE_TIME: float = 1.2
+const MI_MAX_CHARGE_TIME: float = 2.5
+const MI_HAND_ACTIVATION_DELAY: float = 0.5
 
 enum GameState {
 	START,
@@ -164,6 +167,7 @@ var mi_keepalive_timer: float = 0.0
 var mi_air_jump_used: bool = false
 var mi_last_action_time: float = -10.0
 var mi_last_air_jump_time: float = -10.0
+var mi_hand_activation_timer: float = 0.0
 
 var mi_ws: WebSocketPeer = WebSocketPeer.new()
 var mi_reconnect_cooldown: float = 0.0
@@ -301,6 +305,7 @@ func _ready() -> void:
 	_setup_duration_option()
 	_setup_mi_input_option()
 	_load_records()
+	_apply_charge_profile()
 	_apply_sfx_volume()
 	_setup_run()
 	game_state = GameState.START
@@ -347,6 +352,7 @@ func _on_control_selected(index: int) -> void:
 	var selected: Variant = control_option.get_item_metadata(index)
 	if selected is int:
 		current_control_mode = selected
+		_apply_charge_profile()
 		_reset_mi_runtime_state()
 		_save_settings()
 		_refresh_ui()
@@ -395,6 +401,11 @@ func _on_mi_input_selected(index: int) -> void:
 		_reset_mi_runtime_state()
 		_save_settings()
 		_refresh_ui()
+
+func _apply_charge_profile() -> void:
+	if player == null:
+		return
+	player.max_charge_time = MI_MAX_CHARGE_TIME if current_control_mode == ControlMode.MI else MANUAL_MAX_CHARGE_TIME
 
 func _apply_option_popup_theme(option: OptionButton) -> void:
 	if option == null:
@@ -491,9 +502,14 @@ func _poll_mi_action(delta: float) -> void:
 			_mi_reset_decision_tracking()
 	elif mi_state == MIState.IDLE:
 		if mi_decision_label == "hand" and not player.is_airborne:
-			_queue_input_action(InputAction.START_CHARGE)
-			mi_state = MIState.CHARGING
-			_mi_reset_decision_tracking()
+			mi_hand_activation_timer += delta
+			if mi_hand_activation_timer >= MI_HAND_ACTIVATION_DELAY:
+				_queue_input_action(InputAction.START_CHARGE)
+				mi_state = MIState.CHARGING
+				mi_hand_activation_timer = 0.0
+				_mi_reset_decision_tracking()
+		else:
+			mi_hand_activation_timer = 0.0
 	elif mi_state == MIState.AIRBORNE:
 		var now_sec: float = Time.get_ticks_msec() / 1000.0
 		if mi_decision_label == "foot":
@@ -1011,6 +1027,7 @@ func _reset_mi_runtime_state() -> void:
 	mi_air_jump_used = false
 	mi_last_action_time = -10.0
 	mi_last_air_jump_time = -10.0
+	mi_hand_activation_timer = 0.0
 	mi_raw_label = "none"
 	mi_raw_streak = 0
 	mi_decision_label = "none"
