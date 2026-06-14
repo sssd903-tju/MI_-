@@ -1,80 +1,101 @@
 # 跳一跳 MI-BCI
 
-基于前额叶 EEG 头环（FP1/FP2）的运动想象脑机接口游戏。想象左手/右手运动 → 角色跳跃方向。
+基于前额叶 EEG 的运动想象脑机接口康复训练游戏。
+
+想象左手/右手运动 → 脑电实时解码 → 角色跳跃方向控制 → 闭环神经反馈。
+
+## 特性
+
+- **双硬件支持**：消费级 Fp1/Fp2 头环 (LSL直连) + 自制 C3/C4/Fp1/Fp2 四通道电路板 (串口)
+- **时域 FAA 特征**：α/β 频段 × 4子窗 Temporal FAA (8维)，70试次 LOO-CV **68.6%**
+- **实时专注度**：(θ+α)/β 比率，游戏内三色进度条可视化
+- **双事件协议**：trial_start/mi_task 实现脑电窗口精确对齐
+- **一体化 GUI**：采集→训练→推理全流程图形界面
+
+## 架构
+
+```
+硬件层  →  LSL数据流  →  信号处理  →  Temporal FAA(8d)  →  SVM-RBF  →  WebSocket  →  Godot游戏
+头环/PCB     250Hz      带通+陷波    α/β × 4子窗FAA     68.6% LOO     8767端口    跳一跳
+```
 
 ## 快速开始
 
-### 硬件
-- Brain Cube 8ch EEG 放大器 + FP1/FP2 头环
-- macOS / Linux
-
 ### 依赖
+
 ```bash
-conda create -n bci python=3.11
-conda activate bci
-pip install numpy scipy mne scikit-learn websockets pylsl pyqtgraph pyserial
+pip install numpy scipy mne scikit-learn websockets pylsl pyqtgraph
 ```
 
-### 启动
+### 启动在线推理
 
 ```bash
-# 1. 启动串口→LSL 桥接（GUI 或命令行）
-python python/mi_bci_gui.py
-# 在线推理 tab → 选择串口 → 启动串口桥接
+# 启动推理服务器
+python python/fp1fp2_online.py --stream brain-cube-eeg --port 8767
 
-# 2. 启动 MI 在线推理
-python python/fp1fp2_online.py \
-  --stream brain-cube-eeg --port 8767 \
-  --model python/models/fp1fp2_model
-
-# 3. 打开 Godot 项目 → 控制=MI, MI输入=Online → 开始
+# 打开 Godot 项目 → 控制=MI, MI输入=Online → 开始游戏
 ```
 
 ### 离线训练
+
 ```bash
 python python/train_fp1fp2.py \
-  --bdf /path/to/data.bdf \
-  --sessions data/bdf_trials/ \
+  --bdf data.bdf \
+  --sessions data/live_trials/ \
   --output python/models/fp1fp2_model
+```
+
+### GUI
+
+```bash
+python python/mi_bci_gui.py
 ```
 
 ## 项目结构
 
 ```
 ├── python/
-│   ├── fp1fp2_classifier.py   # 核心：30维FAA特征 + SVM/RF/LDA分类器
-│   ├── fp1fp2_online.py       # 在线推理服务器 (LSL → 分类 → WebSocket)
-│   ├── train_fp1fp2.py        # 离线训练脚本
-│   ├── mi_bci_gui.py          # GUI：串口桥接 + 信号监视 + 训练 + 推理
-│   ├── mi_keyboard_sender.py  # 键盘模拟 MI 输入（离线测试用）
-│   ├── replay_bdf_lsl.py      # BDF 文件回放为 LSL 流（测试用）
-│   └── models/fp1fp2_model/   # 训练好的模型
-├── scripts/                   # Godot GDScript
-│   ├── Game.gd                # 主游戏逻辑：WS连接、MI状态机
-│   ├── Player.gd              # 玩家物理：蓄力、跳跃
-│   ├── Platform.gd            # 平台：普通/移动/脆弱
+│   ├── fp1fp2_online.py         # 在线推理服务器
+│   ├── fp1fp2_classifier.py     # 特征提取 + 分类器
+│   ├── train_fp1fp2.py          # 离线训练
+│   ├── mi_bci_gui.py            # GUI 界面
+│   ├── replay_bdf_lsl.py        # BDF → LSL 回放
+│   ├── eeg_reader_fast.py       # EEG 实时波形显示
+│   └── models/fp1fp2_model/     # 训练好的模型
+├── scripts/                     # Godot GDScript
+│   ├── Game.gd                  # 主逻辑: WS, MI 状态机
+│   ├── Player.gd                # 物理: 蓄力, 跳跃
 │   └── managers/
-│       ├── level_mode_manager.gd     # 关卡模式
-│       ├── offline_train_manager.gd  # 离线训练模式
-│       └── data_logger.gd           # JSONL 数据记录
-├── scenes/                    # Godot 场景文件
-├── data/                      # 训练数据
-│   ├── bdf_trials/            # BDF 离线采集数据
-│   └── live_trials/           # 实时串口采集数据
-├── PROJECT_INTRO.md           # 项目介绍与创新点
-├── DATA_LABEL_FLOW.md         # 数据流与标签传输完整文档
-└── README.md
+│       ├── level_mode_manager.gd
+│       ├── offline_train_manager.gd
+│       └── data_logger.gd
+├── scenes/                      # Godot 场景
+├── data/                        # 训练数据样例
+└── docs/
+    ├── PROJECT_INTRO.md         # 项目介绍与创新点
+    ├── DATA_LABEL_FLOW.md       # 数据流完整文档
+    └── 参赛报告_完整版.md        # 完整技术报告
 ```
 
-## 技术要点
+## 特征方法
 
-- **电极**：仅 2 通道 Fp1/Fp2（前额叶），消费级头环即可
-- **特征**：多频带 FAA（前额叶 Alpha 不对称）+ 绝对功率（18 维）
-- **分类器**：SVM-RBF（离线训练 LOOCV 71.8%）
-- **协议**：trial_start → baseline(2s) → mi_task → task(2s) → classify
-- **鲁棒性**：z-score 窗口归一化实现跨设备迁移
-- **疲劳检测**：(θ+α)/β 比率实时显示专注度
+| 方法 | 维度 | 公式 | LOO |
+|------|------|------|-----|
+| Temporal FAA | 8 | α/β FAA × 4子窗(500ms) | **68.6%** |
+| Power (log) | 12 | ln(P_ch^band) | 67.1% |
+| FAA+Power | 18 | 6频带FAA + 12频带logP | 64.3% |
+| FAA | 6 | (FP2-FP1)/(FP2+FP1) | 61.4% |
+
+## 专注度
+
+$$Fatigue = \frac{P_\theta + P_\alpha}{P_\beta},\quad Focus = 100 - Fatigue$$
+
+绿 (>70) / 黄 (40-70) / 红 (<40) 三色进度条，每秒更新。
 
 ## 引用
 
-详见 [PROJECT_INTRO.md](PROJECT_INTRO.md)
+详见 [参赛报告_完整版.md](参赛报告_完整版.md)
+
+## License
+
+MIT

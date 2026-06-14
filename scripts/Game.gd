@@ -139,7 +139,7 @@ var level_mode = null
 var subject_id: String = ""
 var subject_ui: Control = null
 var _session_name_input: LineEdit = null
-var _save_path: String = "/Users/sssd/Desktop/跳一跳/试次数据"
+var _save_path: String = "user://training_data"
 var _save_path_label: Label = null
 var _save_dir_dialog: FileDialog = null
 var score: int = 0
@@ -1498,7 +1498,7 @@ func _create_subject_ui() -> void:
 	_save_path_label.size = Vector2(460, 16)
 	_save_path_label.add_theme_font_size_override("font_size", 9)
 	_save_path_label.add_theme_color_override("font_color", Color(0.35, 0.50, 0.35, 0.8))
-	_save_path_label.text = "保存路径: /Users/sssd/Desktop/跳一跳/试次数据"
+	_save_path_label.text = "保存路径: user://training_data"
 	panel.add_child(_save_path_label)
 
 	_save_dir_dialog = FileDialog.new()
