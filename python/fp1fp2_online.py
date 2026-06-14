@@ -37,8 +37,8 @@ LSL_STREAM = "brain-cube-eeg"
 # ── FAA+Power 特征提取 (18维) ──
 BANDS_18 = {"theta":(4,8),"alpha":(8,13),"low_beta":(13,20),"high_beta":(20,30),"beta":(13,30),"broadband":(0.5,30)}
 
-def extract_18d(fp1_bl, fp1_tk, fp2_bl, fp2_tk):
-    """FAA(6d) + logPower(12d) = 18 维"""
+def extract_8d(fp1_tk, fp2_tk):
+    """Temporal FAA: α/β × 4子窗(500ms) = 8维 (68.6% LOO, 70trial)"""
     from scipy.integrate import trapezoid
     def bp(x, lo, hi):
         nperseg = min(128, len(x)//2)
@@ -49,12 +49,13 @@ def extract_18d(fp1_bl, fp1_tk, fp2_bl, fp2_tk):
         return float(trapezoid(p[m],f[m])) if m.sum()>=2 else 0.0
 
     feat = []
-    for _, (lo, hi) in BANDS_18.items():
-        p1=bp(fp1_tk,lo,hi); p2=bp(fp2_tk,lo,hi)
-        feat.append((p2-p1)/(p2+p1+1e-15))
-    for _, (lo, hi) in BANDS_18.items():
-        feat.append(np.log(bp(fp1_tk,lo,hi)+1e-15))
-        feat.append(np.log(bp(fp2_tk,lo,hi)+1e-15))
+    seg = 125  # 500ms @ 250Hz
+    for (lo, hi) in [(8,13),(13,30)]:  # alpha, beta
+        for s in range(4):
+            se, ee = s*seg, min((s+1)*seg, len(fp1_tk))
+            p1 = bp(fp1_tk[se:ee], lo, hi)
+            p2 = bp(fp2_tk[se:ee], lo, hi)
+            feat.append((p2-p1)/(p2+p1+1e-15))
     return np.nan_to_num(np.array(feat), nan=0, posinf=0, neginf=0)
 
 
@@ -84,12 +85,10 @@ class OnlineProcessor:
         self.seq = 0
         self.buffer = []  # (fp1, fp2) tuples, 全量环形缓冲
 
-        # 双事件协议: trial_start → baseline(2s) → mi_task → task(2s) → classify
+        # 简化协议: trial_start → 等4s → classify (前2s=baseline, 后2s=task)
         self.trial_layer = None
-        self.trial_ts = 0.0      # trial_start 时刻
-        self.task_ts = 0.0       # mi_task 时刻
+        self.trial_ts = 0.0
         self.trial_done = False
-        self.task_started = False
         self._fatigue = 50.0
 
     def feed(self, fp1, fp2):
@@ -100,16 +99,12 @@ class OnlineProcessor:
     def has_result(self):
         if self.trial_layer is None or self.trial_done:
             return False
-        # mi_task 2s 后分类
-        if not self.task_started:
-            return False
-        return time.time() - self.task_ts >= 2.0 and len(self.buffer) >= BUFFER_N
+        return time.time() - self.trial_ts >= 4.0 and len(self.buffer) >= BUFFER_N
 
     def classify(self):
         try:
             buf = np.array(self.buffer)
-            # trial_start → mi_task = baseline, mi_task → now = task
-            # buffer 始终保留最近 4s: 前 2s = baseline, 后 2s = task
+            # 前2s=baseline, 后2s=task
             mid = len(buf) // 2
             bl, tk = buf[:mid], buf[mid:]
 
@@ -126,7 +121,7 @@ class OnlineProcessor:
             if s1 > 1e-10: fp1_bl_c /= s1; fp1_tk_c /= s1
             if s2 > 1e-10: fp2_bl_c /= s2; fp2_tk_c /= s2
 
-            feat = extract_18d(fp1_bl_c, fp1_tk_c, fp2_bl_c, fp2_tk_c)
+            feat = extract_8d(fp1_tk_c, fp2_tk_c)
             result = self.clf.predict_one(feat)
             self._fatigue = self._compute_fatigue(fp1_tk, fp2_tk)
 
@@ -178,26 +173,14 @@ class OnlineProcessor:
             return 50.0
 
     def on_event(self, event):
-        ev_type = event.get("type", "")
-        layer = event.get("layer", -1)
-
-        if ev_type == "trial_start":
-            # 同层去重
+        if event.get("type") == "trial_start":
+            layer = event.get("layer", -1)
             if self.trial_layer == layer and not self.trial_done:
                 return
             self.trial_layer = layer
             self.trial_ts = time.time()
-            self.task_started = False
             self.trial_done = False
-            self.buffer.clear()  # 清空缓冲，开始收集基线
-            logger.info("trial_start layer=%s (baseline)", layer)
-
-        elif ev_type == "mi_task":
-            # mi_task 2s 后 → 标记任务期开始
-            if self.trial_layer == layer and not self.task_started:
-                self.task_started = True
-                self.task_ts = time.time()
-                logger.info("mi_task layer=%s (task phase)", layer)
+            logger.info("trial_start layer=%s", layer)
 
     def packet(self, label, conf):
         self.seq += 1

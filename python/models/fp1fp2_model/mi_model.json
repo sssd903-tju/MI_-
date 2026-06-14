@@ -1,7 +1,8 @@
 {
   "clf_type": "svm",
-  "n_features": 18,
-  "n_samples": 40,
-  "class_balance": "L=20/R=20",
-  "train_accuracy": 0.825
+  "n_features": 8,
+  "feature_type": "temporal_faa_8d",
+  "n_samples": 70,
+  "class_balance": "L=35/R=35",
+  "train_accuracy": 0.7428571428571429
 }

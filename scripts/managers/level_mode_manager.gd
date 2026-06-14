@@ -35,8 +35,6 @@ var idle_timer: float = 0.0
 var land_pending: bool = false
 var status_text: String = ""
 var _trial_sent: bool = false
-var _mi_task_sent: bool = false
-var _mi_task_timer: float = 0.0
 var lives: int = 3
 var invincible_timer: float = 0.0
 var wrong_dir_timer: float = 0.0
@@ -158,21 +156,11 @@ func update(delta: float) -> void:
 			_hide_arrow()
 			idle_timer = 0.0
 			status_text = "选择方向" if game.current_control_mode == game.ControlMode.MANUAL else "MI采集中..."
+			# 箭头隐藏 → 发 trial_start, 服务器4s后分类
 			if not _trial_sent:
 				_trial_sent = true
 				var _dx: float = next_platform.global_position.x - current_platform.global_position.x
 				game.mi_send_event("trial_start", {"layer": row_index + 1, "ground_truth": "left" if _dx < 0 else "right"})
-				_mi_task_sent = false
-				_mi_task_timer = 2.0
-
-
-	# mi_task 定时: trial_start 2s 后自动发送
-	if not _mi_task_sent and _mi_task_timer > 0.0:
-		_mi_task_timer -= delta
-		if _mi_task_timer <= 0.0:
-			_mi_task_sent = true
-			var _mi_dx: float = next_platform.global_position.x - current_platform.global_position.x
-			game.mi_send_event("mi_task", {"layer": row_index + 1, "ground_truth": "left" if _mi_dx < 0 else "right"})
 
 	# Idle timeout
 	if not arrow_shown and not jump_locked:
@@ -362,11 +350,7 @@ func _show_arrow() -> void:
 	_first_trial = false
 	status_text = "观察方向..."
 	_trial_sent = false
-	_mi_task_sent = false
-	_mi_task_timer = 0.0
 	game.mi_decision_label = "none"
-	var _dx: float = next_platform.global_position.x - current_platform.global_position.x
-	game.mi_send_event("trial_start", {"layer": row_index + 1, "ground_truth": "left" if _dx < 0 else "right"})
 
 
 func _hide_arrow() -> void:
