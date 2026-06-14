@@ -1,0 +1,59 @@
+{
+  "mode": "level",
+  "session_file": "user://training_data/session_20260609_232058.jsonl",
+  "timestamp_ms": 1781018479984,
+  "total_trials": 5,
+  "trials": [
+    {
+      "correct": true,
+      "ground_truth": "correct",
+      "layer": 2,
+      "mi_decision": "none",
+      "timestamp_trial_end_ms": 1781018463217,
+      "timestamp_trial_start_ms": 1781018463217,
+      "trial_id": 1,
+      "type": "trial"
+    },
+    {
+      "correct": true,
+      "ground_truth": "correct",
+      "layer": 3,
+      "mi_decision": "none",
+      "timestamp_trial_end_ms": 1781018467402,
+      "timestamp_trial_start_ms": 1781018467402,
+      "trial_id": 2,
+      "type": "trial"
+    },
+    {
+      "correct": true,
+      "ground_truth": "correct",
+      "layer": 4,
+      "mi_decision": "none",
+      "timestamp_trial_end_ms": 1781018471633,
+      "timestamp_trial_start_ms": 1781018471633,
+      "trial_id": 3,
+      "type": "trial"
+    },
+    {
+      "correct": true,
+      "ground_truth": "correct",
+      "layer": 5,
+      "mi_decision": "none",
+      "timestamp_trial_end_ms": 1781018475882,
+      "timestamp_trial_start_ms": 1781018475882,
+      "trial_id": 4,
+      "type": "trial"
+    },
+    {
+      "correct": true,
+      "ground_truth": "correct",
+      "layer": 6,
+      "mi_decision": "none",
+      "timestamp_trial_end_ms": 1781018479983,
+      "timestamp_trial_start_ms": 1781018479983,
+      "trial_id": 5,
+      "type": "trial"
+    }
+  ],
+  "type": "session_end"
+}

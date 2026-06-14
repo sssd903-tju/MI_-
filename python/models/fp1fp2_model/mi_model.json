@@ -1,0 +1,7 @@
+{
+  "clf_type": "svm",
+  "n_features": 18,
+  "n_samples": 40,
+  "class_balance": "L=20/R=20",
+  "train_accuracy": 0.825
+}

@@ -8,6 +8,13 @@ enum PlatformKind {
 	FRAGILE
 }
 
+enum VerticalPosition {
+	NONE,
+	LEFT,
+	RIGHT,
+	BOTH
+}
+
 @export var width: float = 180.0:
 	set(value):
 		width = value
@@ -29,6 +36,7 @@ enum PlatformKind {
 @onready var visual: Polygon2D = $Visual
 @onready var marker: Polygon2D = $Marker
 @onready var collision_shape: CollisionShape2D = $StaticBody2D/CollisionShape2D
+var arrow_indicator: Polygon2D = null
 
 var base_x: float = 0.0
 var move_amplitude: float = 0.0
@@ -36,11 +44,16 @@ var move_speed: float = 0.0
 var move_phase: float = 0.0
 var fragile_used: bool = false
 var fragile_break_timer: float = -1.0
+# Vertical LR mode properties
+var vertical_position: VerticalPosition = VerticalPosition.NONE
+var base_y: float = 0.0
+var _arrow_direction: int = 0
 
 func _ready() -> void:
 	base_x = global_position.x
 	_apply_shape()
 	_apply_style()
+	_create_arrow_indicator()
 
 func _process(delta: float) -> void:
 	if platform_kind == PlatformKind.MOVING and move_amplitude > 0.0:
@@ -170,3 +183,65 @@ func left_edge(extra_margin: float = 0.0) -> float:
 
 func right_edge(extra_margin: float = 0.0) -> float:
 	return global_position.x + width * 0.5 + extra_margin
+
+# Vertical LR mode: check if player (at given x position) overlaps with this platform
+func check_vertical_overlap(player_x: float, player_half_size: float) -> bool:
+	var overlap_width: float = support_overlap_width(player_x, player_half_size)
+	return overlap_width > 0.0
+
+# Vertical LR mode: check if player can land on this platform by direction
+func check_vertical_landing(player_x: float, player_half_size: float, player_y: float) -> bool:
+	if vertical_position == VerticalPosition.NONE:
+		return false
+	
+	# Check if player is close to the platform vertically
+	var y_distance: float = abs(player_y - global_position.y)
+	if y_distance > 40.0:  # Allow some tolerance
+		return false
+	
+	# Check horizontal overlap
+	return check_vertical_overlap(player_x, player_half_size)
+
+# Direction arrow for offline training mode
+func _create_arrow_indicator() -> void:
+	if arrow_indicator != null:
+		return
+	var arrow: Polygon2D = Polygon2D.new()
+	arrow.name = "ArrowIndicator"
+	arrow.visible = false
+	arrow.z_index = 5
+	arrow.color = Color(1.0, 0.88, 0.28, 0.92)
+	add_child(arrow)
+	arrow_indicator = arrow
+	arrow_indicator.position = Vector2(0.0, -height * 0.5 - 32.0)
+
+func show_direction_arrow(direction: int) -> void:
+	if arrow_indicator == null:
+		_create_arrow_indicator()
+	_arrow_direction = direction
+	var arrow_size: float = 22.0
+	var arrow_half_w: float = 16.0
+	if direction < 0:
+		# Left-pointing arrow
+		arrow_indicator.polygon = PackedVector2Array([
+			Vector2(arrow_half_w, -arrow_size),
+			Vector2(-arrow_half_w, 0.0),
+			Vector2(arrow_half_w, arrow_size)
+		])
+	else:
+		# Right-pointing arrow
+		arrow_indicator.polygon = PackedVector2Array([
+			Vector2(-arrow_half_w, -arrow_size),
+			Vector2(arrow_half_w, 0.0),
+			Vector2(-arrow_half_w, arrow_size)
+		])
+	arrow_indicator.visible = true
+
+func hide_direction_arrow() -> void:
+	if arrow_indicator != null:
+		arrow_indicator.visible = false
+	_arrow_direction = 0
+
+func set_arrow_visible(vis: bool) -> void:
+	if arrow_indicator != null:
+		arrow_indicator.visible = vis

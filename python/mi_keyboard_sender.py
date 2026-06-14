@@ -15,7 +15,7 @@ PORT = 8766
 READ_TIMEOUT_SEC = 0.05
 
 
-class RawInput:
+class RawInput: 
     def __enter__(self):
         self.fd = sys.stdin.fileno()
         self.old_settings = termios.tcgetattr(self.fd)

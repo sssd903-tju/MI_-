@@ -54,10 +54,10 @@ const MI_OFFLINE_WS_URL: String = "ws://127.0.0.1:8766"
 const MI_ONLINE_WS_URL: String = "ws://127.0.0.1:8767"
 const MI_RECONNECT_INTERVAL: float = 0.75
 const MI_PACKET_TTL_MS: int = 1500
-const MI_HAND_CONF_THRESHOLD: float = 0.7
-const MI_FOOT_CONF_THRESHOLD: float = 0.72
-const MI_HAND_CONFIRM_COUNT: int = 3
-const MI_FOOT_CONFIRM_COUNT: int = 2
+const MI_HAND_CONF_THRESHOLD: float = 0.50
+const MI_FOOT_CONF_THRESHOLD: float = 0.50
+const MI_HAND_CONFIRM_COUNT: int = 1
+const MI_FOOT_CONFIRM_COUNT: int = 1
 const MI_KEEPALIVE_TIMEOUT: float = 0.7
 const MI_ACTION_COOLDOWN: float = 0.12
 const MI_AIR_JUMP_COOLDOWN: float = 0.2
@@ -74,7 +74,9 @@ enum GameState {
 
 enum GameMode {
 	CLASSIC,
-	RACE
+	RACE,
+	VERTICAL_TRAIN,
+	VERTICAL_TRAIN_OFFLINE
 }
 
 enum ControlMode {
@@ -127,8 +129,19 @@ enum MIState {
 @onready var perfect_count_label: Label = $HUD/PerfectCountLabel
 @onready var combo_label: Label = $HUD/ComboLabel
 @onready var race_info_label: Label = $HUD/RaceInfoLabel
+@onready var platform_minimap: Control = $HUD/PlatformMinimap
 
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+const OfflineTrainManagerScript = preload("res://scripts/managers/offline_train_manager.gd")
+const LevelModeScript = preload("res://scripts/managers/level_mode_manager.gd")
+var offline_train = null
+var level_mode = null
+var subject_id: String = ""
+var subject_ui: Control = null
+var _session_name_input: LineEdit = null
+var _save_path: String = "/Users/sssd/Desktop/跳一跳/试次数据"
+var _save_path_label: Label = null
+var _save_dir_dialog: FileDialog = null
 var score: int = 0
 var game_state: GameState = GameState.START
 var wait_for_accept_release: bool = true
@@ -157,6 +170,7 @@ var current_mode: GameMode = GameMode.CLASSIC
 var current_control_mode: ControlMode = ControlMode.MANUAL
 var current_mi_input_mode: MIInputMode = MIInputMode.OFFLINE
 var race_time_left: float = 0.0
+
 var race_start_x: float = START_X
 var race_distance: int = 0
 var race_duration_seconds: int = RACE_DURATION_DEFAULT
@@ -175,6 +189,9 @@ var mi_last_seq: int = -1
 var mi_raw_label: String = "none"
 var mi_raw_streak: int = 0
 var mi_decision_label: String = "none"
+var mi_last_confidence: float = 0.0
+var mi_display_label: String = "..."
+var mi_fatigue: float = 50.0
 
 var mi_messages_received: int = 0
 var mi_out_of_order_dropped: int = 0
@@ -198,6 +215,8 @@ var i18n: Dictionary = {
 		"mode": "模式",
 		"mode_classic": "经典",
 		"mode_race": "竞速赛",
+		"mode_vertical_train": "关卡模式",
+		"mode_vertical_train_offline": "关卡训练",
 		"control": "控制",
 		"control_manual": "手操",
 		"control_mi": "MI",
@@ -245,6 +264,8 @@ var i18n: Dictionary = {
 		"mode": "Mode",
 		"mode_classic": "Classic",
 		"mode_race": "Race",
+		"mode_vertical_train": "Level Mode",
+		"mode_vertical_train_offline": "Level Training",
 		"control": "Control",
 		"control_manual": "Manual",
 		"control_mi": "MI",
@@ -310,6 +331,12 @@ func _ready() -> void:
 	_setup_run()
 	game_state = GameState.START
 	_apply_brightness()
+	offline_train = OfflineTrainManagerScript.new()
+	offline_train.init(self)
+	level_mode = LevelModeScript.new()
+	level_mode.init(self)
+	_create_subject_ui()
+	_create_fatigue_ui()
 	_refresh_ui()
 
 func _setup_language_option() -> void:
@@ -363,7 +390,20 @@ func _setup_mode_option() -> void:
 	mode_option.set_item_metadata(0, GameMode.CLASSIC)
 	mode_option.add_item(_t("mode_race"))
 	mode_option.set_item_metadata(1, GameMode.RACE)
-	mode_option.select(0 if current_mode == GameMode.CLASSIC else 1)
+	mode_option.add_item(_t("mode_vertical_train"))
+	mode_option.set_item_metadata(2, GameMode.VERTICAL_TRAIN)
+	mode_option.add_item(_t("mode_vertical_train_offline"))
+	mode_option.set_item_metadata(3, GameMode.VERTICAL_TRAIN_OFFLINE)
+	var selected_idx: int = 0
+	if current_mode == GameMode.CLASSIC:
+		selected_idx = 0
+	elif current_mode == GameMode.RACE:
+		selected_idx = 1
+	elif current_mode == GameMode.VERTICAL_TRAIN:
+		selected_idx = 2
+	elif current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		selected_idx = 3
+	mode_option.select(selected_idx)
 	_apply_option_popup_theme(mode_option)
 	if not mode_option.item_selected.is_connected(_on_mode_selected):
 		mode_option.item_selected.connect(_on_mode_selected)
@@ -435,6 +475,10 @@ func _on_mode_selected(index: int) -> void:
 	if mode_value is int:
 		current_mode = mode_value
 		_save_settings()
+		if current_mode == GameMode.VERTICAL_TRAIN and game_state == GameState.START:
+			level_mode.show_level_select()
+		else:
+			level_mode.hide_level_select()
 		_refresh_ui()
 
 func _on_duration_selected(index: int) -> void:
@@ -448,9 +492,53 @@ func _t(key: String) -> String:
 	var pack: Dictionary = i18n.get(current_language, i18n["en"])
 	return str(pack.get(key, key))
 
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or event.echo:
+		return
+	var ke: InputEventKey = event as InputEventKey
+
+	# ESC: always return to main menu
+	if ke.keycode == KEY_ESCAPE and ke.pressed:
+		if game_state == GameState.PLAYING or game_state == GameState.GAME_OVER:
+			game_state = GameState.START
+			wait_for_accept_release = true
+		return
+
+	# Space: start / restart
+	if ke.keycode == KEY_SPACE and ke.pressed:
+		if game_state == GameState.START:
+			_save_settings()
+			_setup_run()
+			if current_mode != GameMode.VERTICAL_TRAIN:
+				game_state = GameState.PLAYING
+			wait_for_accept_release = true
+		elif game_state == GameState.GAME_OVER:
+			_setup_run()
+			if current_mode != GameMode.VERTICAL_TRAIN:
+				game_state = GameState.PLAYING
+			wait_for_accept_release = true
+
+	# A/D: jump direction in level mode (manual only)
+	if current_mode == GameMode.VERTICAL_TRAIN and current_control_mode == ControlMode.MANUAL and game_state == GameState.PLAYING and ke.pressed:
+		if ke.keycode == KEY_A or ke.keycode == KEY_LEFT:
+			level_mode.try_jump(-1)
+		elif ke.keycode == KEY_D or ke.keycode == KEY_RIGHT:
+			level_mode.try_jump(1)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_MINUS or event.keycode == KEY_KP_SUBTRACT:
+		if event.keycode == KEY_TAB:
+			if current_mode == GameMode.VERTICAL_TRAIN and game_state == GameState.START:
+				if level_mode.select_ui != null and level_mode.select_ui.visible:
+					level_mode.hide_level_select()
+				else:
+					level_mode.show_level_select()
+		elif event.keycode == KEY_ESCAPE:
+			if game_state == GameState.PLAYING or game_state == GameState.GAME_OVER:
+				game_state = GameState.START
+				wait_for_accept_release = true
+		elif event.keycode == KEY_MINUS or event.keycode == KEY_KP_SUBTRACT:
 			_adjust_brightness(-BRIGHTNESS_STEP)
 		elif event.keycode == KEY_EQUAL or event.keycode == KEY_PLUS or event.keycode == KEY_KP_ADD:
 			_adjust_brightness(BRIGHTNESS_STEP)
@@ -474,6 +562,15 @@ func _poll_manual_action() -> void:
 		_queue_input_action(InputAction.RELEASE_JUMP)
 
 func _poll_mi_action(delta: float) -> void:
+	# Level mode: MI left/right triggers jump directly
+	if current_mode == GameMode.VERTICAL_TRAIN:
+		if mi_decision_label == "left":
+			level_mode.try_jump(-1)
+		elif mi_decision_label == "right":
+			level_mode.try_jump(1)
+		_mi_reset_decision_tracking()
+		return
+
 	if player.is_airborne:
 		mi_state = MIState.AIRBORNE
 	else:
@@ -585,7 +682,11 @@ func _physics_process(delta: float) -> void:
 		_refresh_ui()
 		return
 
-	if current_mode == GameMode.RACE:
+	if current_mode == GameMode.VERTICAL_TRAIN:
+		level_mode.update(delta)
+	elif current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		offline_train.update(delta)
+	elif current_mode == GameMode.RACE:
 		race_time_left = max(0.0, race_time_left - delta)
 		race_distance = max(race_distance, int(max(0.0, player.global_position.x - race_start_x)))
 		score = race_distance
@@ -606,8 +707,8 @@ func _physics_process(delta: float) -> void:
 		if feedback_timer <= 0.0:
 			feedback_text = ""
 
-	_update_realtime_bridge(delta)
-	if current_control_mode == ControlMode.MI:
+	# _update_realtime_bridge(delta)  # disabled
+	if current_control_mode == ControlMode.MI or current_mode == GameMode.VERTICAL_TRAIN_OFFLINE or current_mode == GameMode.VERTICAL_TRAIN:
 		_update_mi_bridge(delta)
 
 	if current_mode == GameMode.CLASSIC and perfect_display_timer > 0.0:
@@ -623,19 +724,23 @@ func _physics_process(delta: float) -> void:
 			combo_label.visible = false
 			combo_count = 0
 
-	if not player.is_airborne:
+	if not player.is_airborne and current_mode != GameMode.VERTICAL_TRAIN and current_mode != GameMode.VERTICAL_TRAIN_OFFLINE:
 		_ensure_ground_support()
 
-	if current_control_mode == ControlMode.MANUAL:
-		if not player.is_airborne:
-			if Input.is_action_pressed("ui_accept"):
-				player.begin_charge()
-			if Input.is_action_just_released("ui_accept"):
-				if player.release_jump():
-					_register_jump_combo()
-	else:
-		_poll_mi_action(delta)
-		_consume_input_action()
+	if current_mode != GameMode.VERTICAL_TRAIN_OFFLINE:
+		if current_mode == GameMode.VERTICAL_TRAIN:
+			if current_control_mode == ControlMode.MI:
+				_poll_mi_action(delta)
+		elif current_control_mode == ControlMode.MANUAL:
+			if not player.is_airborne:
+				if Input.is_action_pressed("ui_accept"):
+					player.begin_charge()
+				if Input.is_action_just_released("ui_accept"):
+					if player.release_jump():
+						_register_jump_combo()
+		else:
+			_poll_mi_action(delta)
+			_consume_input_action()
 
 	if player.is_charging and not full_charge_cue_played and player.charge_ratio() >= 0.995:
 		_play_charge_ready_sfx()
@@ -649,8 +754,9 @@ func _physics_process(delta: float) -> void:
 	if player.is_airborne and player.feet_y() >= previous_feet_y - 1.0:
 		_try_land_on_platform(previous_feet_y, player.feet_y())
 
-	_follow_camera(delta)
-	_maintain_platforms()
+	if current_mode != GameMode.VERTICAL_TRAIN and current_mode != GameMode.VERTICAL_TRAIN_OFFLINE:
+		_follow_camera(delta)
+		_maintain_platforms()
 	_check_game_over()
 	_refresh_ui()
 
@@ -679,17 +785,23 @@ func _setup_run() -> void:
 	race_distance = 0
 	_reset_mi_runtime_state()
 
-	var first_platform: Platform = _create_platform(START_X, START_Y, START_WIDTH, Platform.PlatformKind.NORMAL, 0.0)
-	player.reset_to_platform(first_platform)
-	player.always_show_charge_bar = current_control_mode == ControlMode.MANUAL
-	standing_platform = first_platform
-	standing_platform_last_x = first_platform.global_position.x
-	race_start_x = player.global_position.x
+	if current_mode == GameMode.VERTICAL_TRAIN:
+		level_mode.show_level_select()
+		return
+	elif current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		offline_train.setup_level()
+	else:
+		var first_platform: Platform = _create_platform(START_X, START_Y, START_WIDTH, Platform.PlatformKind.NORMAL, 0.0)
+		player.reset_to_platform(first_platform)
+		player.always_show_charge_bar = current_control_mode == ControlMode.MANUAL
+		standing_platform = first_platform
+		standing_platform_last_x = first_platform.global_position.x
+		race_start_x = player.global_position.x
 
-	camera_2d.global_position = Vector2(player.global_position.x + CAMERA_LEAD_X, CAMERA_FIXED_Y)
+		camera_2d.global_position = Vector2(player.global_position.x + CAMERA_LEAD_X, CAMERA_FIXED_Y)
 
-	for _i: int in range(START_PLATFORM_COUNT):
-		_spawn_next_platform(false)
+		for _i: int in range(START_PLATFORM_COUNT):
+			_spawn_next_platform(false)
 
 	_refresh_ui()
 
@@ -731,6 +843,13 @@ func _maintain_platforms() -> void:
 			platform.queue_free()
 
 func _try_land_on_platform(previous_feet_y: float, current_feet_y: float) -> void:
+	if current_mode == GameMode.VERTICAL_TRAIN:
+		level_mode.try_land(previous_feet_y, current_feet_y)
+		return
+	if current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		offline_train.try_land(previous_feet_y, current_feet_y)
+		return
+
 	var best_platform: Platform = null
 	var best_overlap: float = -1.0
 	var second_overlap: float = -1.0
@@ -907,8 +1026,19 @@ func _update_realtime_bridge(delta: float) -> void:
 	realtime_ws = WebSocketPeer.new()
 	realtime_ws.connect_to_url(REALTIME_WS_URL)
 
+func send_mi_marker(event_type: String, data: Dictionary) -> void:
+	if mi_ws == null or mi_ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	var payload: Dictionary = data.duplicate()
+	payload["type"] = event_type
+	payload["timestamp_ms"] = int(Time.get_unix_time_from_system() * 1000.0)
+	payload["subject_id"] = subject_id
+	var msg: String = JSON.stringify(payload)
+	mi_ws.send_text(msg)
+
 func _update_mi_bridge(delta: float) -> void:
-	if current_control_mode != ControlMode.MI:
+	var need_mi: bool = current_control_mode == ControlMode.MI or current_mode == GameMode.VERTICAL_TRAIN or current_mode == GameMode.VERTICAL_TRAIN_OFFLINE
+	if not need_mi:
 		if mi_ws != null and mi_ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 			mi_ws.close()
 		return
@@ -967,6 +1097,11 @@ func _process_mi_packet(raw_text: String) -> void:
 		return
 	var data: Dictionary = parsed
 
+	# 独立专注度更新包（每秒推送）
+	if data.get("type", "") == "fatigue":
+		mi_fatigue = clamp(float(data.get("fatigue", 50.0)), 0.0, 100.0)
+		return
+
 	var seq: int = int(data.get("seq", -1))
 	if seq <= mi_last_seq:
 		# Allow sender restart in offline tests where sequence often resets to 1.
@@ -988,14 +1123,22 @@ func _process_mi_packet(raw_text: String) -> void:
 	mi_latency_ms_ema = lag_ms if is_zero_approx(mi_latency_ms_ema) else lerp(mi_latency_ms_ema, lag_ms, 0.18)
 
 	var label: String = str(data.get("label", "rest")).to_lower()
-	if label != "hand" and label != "foot":
+	if label != "hand" and label != "foot" and label != "left" and label != "right":
 		label = "rest"
 	var confidence: float = clamp(float(data.get("confidence", 0.0)), 0.0, 1.0)
+	mi_fatigue = clamp(float(data.get("fatigue", 50.0)), 0.0, 100.0)
 	_process_mi_signal(label, confidence)
 
 func _process_mi_signal(label: String, confidence: float) -> void:
+	mi_last_confidence = confidence
 	var effective_label: String = "rest"
-	if label == "hand" and confidence >= MI_HAND_CONF_THRESHOLD:
+	# Level mode: map hand/foot to left/right
+	if current_mode == GameMode.VERTICAL_TRAIN or current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		if (label == "hand" or label == "left" or label == "left_hand") and confidence >= MI_HAND_CONF_THRESHOLD:
+			effective_label = "left"
+		elif (label == "foot" or label == "right" or label == "right_hand") and confidence >= MI_FOOT_CONF_THRESHOLD:
+			effective_label = "right"
+	elif label == "hand" and confidence >= MI_HAND_CONF_THRESHOLD:
 		effective_label = "hand"
 	elif label == "foot" and confidence >= MI_FOOT_CONF_THRESHOLD:
 		effective_label = "foot"
@@ -1011,6 +1154,7 @@ func _process_mi_signal(label: String, confidence: float) -> void:
 		needed = 1
 	if mi_raw_streak >= needed and mi_decision_label != effective_label:
 		mi_decision_label = effective_label
+		mi_display_label = effective_label + " " + str(int(confidence * 100)) + "%"
 
 func _mi_needed_count(effective_label: String) -> int:
 	if effective_label == "rest":
@@ -1025,7 +1169,6 @@ func _mi_needed_count(effective_label: String) -> int:
 
 func _mi_reset_decision_tracking() -> void:
 	mi_decision_label = "none"
-	mi_raw_label = "none"
 	mi_raw_streak = 0
 
 func _reset_mi_runtime_state() -> void:
@@ -1081,6 +1224,8 @@ func _follow_camera(delta: float) -> void:
 func _check_game_over() -> void:
 	if game_state != GameState.PLAYING:
 		return
+	if current_mode == GameMode.VERTICAL_TRAIN or current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		return  # Handled by manager
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var bottom_limit: float = camera_2d.global_position.y + viewport_size.y * 0.5 + 80.0
 	if player.global_position.y > bottom_limit:
@@ -1231,6 +1376,7 @@ func _load_settings() -> void:
 	var saved_lang: String = str(data.get("language", current_language))
 	if saved_lang == "zh" or saved_lang == "en":
 		current_language = saved_lang
+	subject_id = str(data.get("subject_id", ""))
 	var saved_mode: String = str(data.get("mode", "classic"))
 	current_mode = GameMode.RACE if saved_mode == "race" else GameMode.CLASSIC
 	var saved_control: String = str(data.get("control_mode", "manual"))
@@ -1249,12 +1395,13 @@ func _load_settings() -> void:
 
 func _save_settings() -> void:
 	var data: Dictionary = {
+		"subject_id": subject_id,
 		"brightness": brightness,
 		"sfx_volume": sfx_volume,
 		"language": current_language,
 		"control_mode": "mi" if current_control_mode == ControlMode.MI else "manual",
 		"mi_input_mode": "online" if current_mi_input_mode == MIInputMode.ONLINE else "offline",
-		"mode": "race" if current_mode == GameMode.RACE else "classic",
+		"mode": "race" if current_mode == GameMode.RACE else "vertical_train_offline" if current_mode == GameMode.VERTICAL_TRAIN_OFFLINE else "classic",
 		"race_duration": race_duration_seconds,
 		"player_name": player_name_edit.text.strip_edges()
 	}
@@ -1263,7 +1410,339 @@ func _save_settings() -> void:
 		file.store_string(JSON.stringify(data))
 		file.close()
 
-func _save_record(final_score: int) -> void:
+func _browse_save_path() -> void:
+	if _save_dir_dialog != null:
+		_save_dir_dialog.popup_centered()
+
+func _on_save_dir_selected(path: String) -> void:
+	_save_path = path
+	if _save_path_label != null:
+		_save_path_label.text = "保存路径: " + path
+
+func _create_subject_ui() -> void:
+	subject_ui = Control.new()
+	subject_ui.name = "SubjectUI"
+	$HUD.add_child(subject_ui)
+
+	# Reposition player_name_edit
+	if player_name_edit != null:
+		player_name_edit.position.x = 20
+		player_name_edit.size.x = 150
+		player_name_edit.placeholder_text = "被试ID"
+		if not player_name_edit.text_changed.is_connected(_on_subject_id_changed):
+			player_name_edit.text_changed.connect(_on_subject_id_changed)
+		player_name_edit.text = subject_id
+
+	# Toggle button
+	var toggle_btn: Button = Button.new()
+	toggle_btn.name = "SubjectToggleBtn"
+	toggle_btn.text = "被试管理 ▼"
+	toggle_btn.position = Vector2(178, player_name_edit.position.y if player_name_edit != null else 90)
+	toggle_btn.size = Vector2(90, 28)
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = Color(0.30, 0.55, 0.35, 0.85)
+	sb.corner_radius_top_left = 5; sb.corner_radius_top_right = 5
+	sb.corner_radius_bottom_right = 5; sb.corner_radius_bottom_left = 5
+	toggle_btn.add_theme_stylebox_override("normal", sb)
+	toggle_btn.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	toggle_btn.add_theme_font_size_override("font_size", 12)
+	toggle_btn.pressed.connect(_toggle_subject_panel)
+	subject_ui.add_child(toggle_btn)
+
+	# Expandable panel
+	var panel: Control = Control.new()
+	panel.name = "SubjectPanel"
+	panel.visible = false
+	var bw: float = 520.0
+	var bh: float = 340.0
+	var bg: ColorRect = ColorRect.new()
+	bg.name = "PanelBG"
+	bg.color = Color(0.93, 0.95, 0.90, 0.96)
+	bg.size = Vector2(bw, bh)
+	bg.position = Vector2(20, toggle_btn.position.y + 34)
+	panel.add_child(bg)
+
+	_add_panel_label(panel, "被试管理", 28, bg.position.y + 10, 16, Color(0.15, 0.25, 0.15))
+	# Subject info
+	var info: Label = _add_panel_label(panel, "", 28, bg.position.y + 34, 13, Color(0.25, 0.35, 0.25))
+	info.name = "SubjectInfo"
+	info.text = _get_subject_session_info()
+	# Session list
+	var sl: Label = _add_panel_label(panel, "", 28, bg.position.y + 54, 11, Color(0.35, 0.45, 0.35))
+	sl.name = "SessionList"
+	sl.size = Vector2(bw - 56, 36)
+	sl.text = _get_session_list_text()
+
+	# Session config section
+	_add_panel_label(panel, "—— 离线训练配置 ——", 28, bg.position.y + 94, 11, Color(0.20, 0.30, 0.20))
+
+	_session_name_input = LineEdit.new()
+	_session_name_input.placeholder_text = "会话名称(可选)"
+	_session_name_input.position = Vector2(28, bg.position.y + 112)
+	_session_name_input.size = Vector2(240, 22)
+	_session_name_input.flat = true
+	_session_name_input.add_theme_font_size_override("font_size", 11)
+	panel.add_child(_session_name_input)
+
+	var browse_btn: Button = Button.new()
+	browse_btn.text = "选择路径..."
+	browse_btn.position = Vector2(276, bg.position.y + 112)
+	browse_btn.size = Vector2(80, 22)
+	browse_btn.flat = true
+	browse_btn.add_theme_font_size_override("font_size", 10)
+	browse_btn.pressed.connect(_browse_save_path)
+	panel.add_child(browse_btn)
+
+	_save_path_label = Label.new()
+	_save_path_label.position = Vector2(28, bg.position.y + 138)
+	_save_path_label.size = Vector2(460, 16)
+	_save_path_label.add_theme_font_size_override("font_size", 9)
+	_save_path_label.add_theme_color_override("font_color", Color(0.35, 0.50, 0.35, 0.8))
+	_save_path_label.text = "保存路径: /Users/sssd/Desktop/跳一跳/试次数据"
+	panel.add_child(_save_path_label)
+
+	_save_dir_dialog = FileDialog.new()
+	_save_dir_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	_save_dir_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_save_dir_dialog.title = "选择离线数据保存路径"
+	_save_dir_dialog.size = Vector2(500, 400)
+	_save_dir_dialog.dir_selected.connect(_on_save_dir_selected)
+	subject_ui.add_child(_save_dir_dialog)
+
+	# Records section title
+	_add_panel_label(panel, "—— 最近记录 ——", 28, bg.position.y + 162, 12, Color(0.20, 0.30, 0.20))
+	# Records moved here
+	var rl: Label = _add_panel_label(panel, "", 28, bg.position.y + 180, 11, Color(0.30, 0.40, 0.30))
+	rl.name = "PanelRecords"
+	rl.size = Vector2(bw - 56, 80)
+	rl.text = _get_records_text()
+
+	# Buttons row
+	var by: float = bg.position.y + bh - 32
+	var bx: float = 28.0
+	_add_small_btn(panel, "刷新", bx, by, _refresh_subject_info); bx += 80
+	_add_small_btn(panel, "打开目录", bx, by, _open_data_dir); bx += 80
+	_add_small_btn(panel, "导出记录", bx, by, _export_records); bx += 80
+	_add_small_btn(panel, "清除记录", bx, by, _clear_records_prompt)
+
+	# Hide original records display
+	if records_title != null:
+		records_title.visible = false
+	if records_label != null:
+		records_label.visible = false
+
+	subject_ui.add_child(panel)
+
+
+func _add_panel_label(parent: Control, txt: String, x: float, y: float, fs: int, col: Color) -> Label:
+	var lb: Label = Label.new()
+	lb.text = txt
+	lb.position = Vector2(x, y)
+	lb.size = Vector2(460, fs + 6)
+	lb.add_theme_color_override("font_color", col)
+	lb.add_theme_font_size_override("font_size", fs)
+	parent.add_child(lb)
+	return lb
+
+
+func _add_small_btn(parent: Control, txt: String, x: float, y: float, callback: Callable) -> void:
+	var btn: Button = Button.new()
+	btn.text = txt
+	btn.position = Vector2(x, y)
+	btn.size = Vector2(70, 22)
+	var s: StyleBoxFlat = StyleBoxFlat.new()
+	s.bg_color = Color(0.30, 0.55, 0.35, 0.8)
+	s.corner_radius_top_left = 4; s.corner_radius_top_right = 4
+	s.corner_radius_bottom_right = 4; s.corner_radius_bottom_left = 4
+	btn.add_theme_stylebox_override("normal", s)
+	btn.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	btn.add_theme_font_size_override("font_size", 11)
+	btn.pressed.connect(callback)
+	parent.add_child(btn)
+
+
+func _create_fatigue_ui() -> void:
+	# 专注度条 —— state_label 右侧
+	var container: Control = Control.new()
+	container.name = "FatigueUI"
+	container.position = Vector2(20, 164)
+	$HUD.add_child(container)
+
+	var bg: ColorRect = ColorRect.new()
+	bg.name = "FatigueBG"
+	bg.color = Color(0.15, 0.15, 0.15, 0.55)
+	bg.size = Vector2(140, 18)
+	bg.position = Vector2(0, 0)
+	container.add_child(bg)
+
+	var fill: ColorRect = ColorRect.new()
+	fill.name = "FatigueFill"
+	fill.size = Vector2(70, 16)
+	fill.position = Vector2(1, 1)
+	container.add_child(fill)
+
+	var label: Label = Label.new()
+	label.name = "FatigueLabel"
+	label.text = "🟢 专注度 50"
+	label.position = Vector2(4, 1)
+	label.size = Vector2(132, 16)
+	label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	label.add_theme_font_size_override("font_size", 11)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	container.add_child(label)
+
+func _update_fatigue_ui() -> void:
+	var container: Control = $HUD.get_node_or_null("FatigueUI")
+	if container == null:
+		return
+	var fill: ColorRect = container.get_node_or_null("FatigueFill")
+	var label: Label = container.get_node_or_null("FatigueLabel")
+	if fill == null or label == null:
+		return
+
+	var focus: float = 100.0 - mi_fatigue
+	var w: float = clamp(focus / 100.0 * 138.0, 10.0, 138.0)
+	fill.size.x = w
+
+	var t: float = mi_fatigue / 100.0
+	if t < 0.4: fill.color = Color(0.25, 0.72, 0.30, 0.9)
+	elif t < 0.7: fill.color = Color(0.95, 0.70, 0.15, 0.9)
+	else: fill.color = Color(0.95, 0.30, 0.20, 0.9)
+
+	var status: String
+	if mi_fatigue < 30: status = "🟢 "
+	elif mi_fatigue < 60: status = "🟡 "
+	else: status = "🔴 "
+	label.text = status + "专注度 " + str(int(focus))
+
+func _get_records_text() -> String:
+	if recent_records.is_empty():
+		return "暂无记录"
+	var lines: Array[String] = []
+	var max_s: int = min(5, recent_records.size())
+	for i: int in range(max_s):
+		var item: Dictionary = recent_records[i]
+		var time_text: String = str(item.get("time", ""))
+		var player_text: String = str(item.get("player", _t("default_player")))
+		var score_text: String = str(item.get("score", ""))
+		lines.append("%d. %s %s %s" % [i + 1, time_text, player_text, score_text])
+	return "\n".join(lines)
+
+
+func _open_data_dir() -> void:
+	var path: String = OS.get_user_data_dir().path_join("training_data")
+	DirAccess.make_dir_recursive_absolute("user://training_data")
+	OS.shell_open(ProjectSettings.globalize_path("user://training_data"))
+
+
+func _export_records() -> void:
+	var text: String = "被试ID: %s\\n" % subject_id
+	text += _get_records_text()
+	text += "\n\n\u4f1a\u8bdd\u5217\u8868:\n" + _get_session_list_text()
+	var file: FileAccess = FileAccess.open("user://export_records.txt", FileAccess.WRITE)
+	if file != null:
+		file.store_string(text)
+		file.close()
+	OS.shell_open(ProjectSettings.globalize_path("user://export_records.txt"))
+
+
+func _clear_records_prompt() -> void:
+	recent_records.clear()
+	_save_settings()
+	_update_records_display()
+	_refresh_subject_info()
+
+
+func _toggle_subject_panel() -> void:
+	if subject_ui == null:
+		return
+	var panel: Control = subject_ui.get_node_or_null("SubjectPanel")
+	var btn: Button = subject_ui.get_node_or_null("SubjectToggleBtn")
+	if panel != null:
+		panel.visible = not panel.visible
+		if btn != null:
+			btn.text = "被试管理 \u25b2" if panel.visible else "被试管理 \u25bc"
+		if panel.visible:
+			_refresh_subject_info()
+
+func _get_session_list_text() -> String:
+	var sid: String = subject_id.strip_edges()
+	if sid == "":
+		return "\uff08未设置被试ID\uff09"
+	var d: String = "user://training_data/"
+	var files: Array = []
+	var da: DirAccess = DirAccess.open(d)
+	if da != null:
+		da.list_dir_begin()
+		var fn: String = da.get_next()
+		while fn != "":
+			if sid in fn and fn.ends_with(".jsonl"):
+				files.append(fn)
+			fn = da.get_next()
+		da.list_dir_end()
+	if files.is_empty():
+		return "暂无训练数据"
+	files.sort()
+	var text: String = ""
+	var max_s: int = min(3, files.size())
+	for i in range(max_s):
+		text += files[files.size() - 1 - i] + "\n"
+	if files.size() > max_s:
+		text += "... 共%d次训练记录" % files.size()
+	return text
+
+
+func _on_subject_id_changed(txt: String) -> void:
+	subject_id = txt
+	_save_settings()
+	_refresh_subject_info()
+
+func _refresh_subject_info() -> void:
+	if subject_ui == null:
+		return
+	var panel: Control = subject_ui.get_node_or_null("SubjectPanel")
+	if panel == null:
+		return
+	var lb: Label = panel.get_node_or_null("SubjectInfo")
+	if lb != null:
+		lb.text = _get_subject_session_info()
+	var sl: Label = panel.get_node_or_null("SessionList")
+	if sl != null:
+		sl.text = _get_session_list_text()
+
+func _get_subject_session_info() -> String:
+	var sid: String = subject_id.strip_edges()
+	if sid == "":
+		return "未设置被试ID"
+	var d: String = "user://training_data/"
+	var count: int = 0
+	var da: DirAccess = DirAccess.open(d)
+	if da != null:
+		da.list_dir_begin()
+		var fn: String = da.get_next()
+		while fn != "":
+			if sid in fn and fn.ends_with(".jsonl"):
+				count += 1
+			fn = da.get_next()
+		da.list_dir_end()
+	return "已采集 %d 次训练" % count
+
+func mi_send_event(ev_type: String, extra: Dictionary = {}) -> void:
+	if mi_ws == null or mi_ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	var p: Dictionary = {"type": ev_type, "timestamp_ms": int(Time.get_unix_time_from_system() * 1000.0)}
+	p.merge(extra)
+	mi_ws.send_text(JSON.stringify(p))
+
+func end_game(final_score) -> void:
+	_save_record(final_score)
+	_save_settings()
+	_update_records_display()
+	game_state = GameState.GAME_OVER
+	wait_for_accept_release = true
+	_refresh_ui()
+
+func _save_record(final_score) -> void:
 	var player_name: String = player_name_edit.text.strip_edges()
 	if player_name == "":
 		player_name = _t("default_player")
@@ -1305,10 +1784,15 @@ func _update_records_display() -> void:
 		var score_text: String = str(item.get("score", 0))
 		lines.append(_t("record_line") % [i + 1, time_text, player_text, score_text])
 	records_label.text = "\n".join(lines)
+	_refresh_subject_info()
 
 func _refresh_ui() -> void:
 	if current_mode == GameMode.RACE:
 		score_label.text = "%s: %d" % [_t("distance"), score]
+	elif current_mode == GameMode.VERTICAL_TRAIN:
+		score_label.text = ""
+	elif current_mode == GameMode.VERTICAL_TRAIN_OFFLINE:
+		score_label.text = ""
 	else:
 		score_label.text = "%s: %d" % [_t("score"), score]
 	brightness_label.text = "%s: %d%% (-/+)" % [_t("brightness"), int(brightness * 100.0)]
@@ -1324,14 +1808,14 @@ func _refresh_ui() -> void:
 	records_title.text = _t("records_title")
 	start_label.text = _t("start_title")
 	race_info_label.text = _t("race_info") % [race_time_left, race_distance]
-	if realtime_ws != null and realtime_ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+	if mi_ws != null and mi_ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		network_label.text = "%s: %s" % [_t("network"), _t("net_online")]
-	elif realtime_ws != null and realtime_ws.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+	elif mi_ws != null and mi_ws.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
 		network_label.text = "%s: %s" % [_t("network"), _t("net_connecting")]
 	else:
 		network_label.text = "%s: %s" % [_t("network"), _t("net_offline")]
-	records_title.visible = game_state != GameState.PLAYING
-	records_label.visible = game_state != GameState.PLAYING
+	records_title.visible = false
+	records_label.visible = false
 	player_name_edit.visible = game_state != GameState.PLAYING
 	language_label.visible = game_state != GameState.PLAYING
 	language_option.visible = game_state != GameState.PLAYING
@@ -1344,6 +1828,11 @@ func _refresh_ui() -> void:
 	duration_label.visible = game_state != GameState.PLAYING and current_mode == GameMode.RACE
 	duration_option.visible = game_state != GameState.PLAYING and current_mode == GameMode.RACE
 	race_info_label.visible = game_state == GameState.PLAYING and current_mode == GameMode.RACE
+	platform_minimap.visible = false
+	_update_fatigue_ui()
+	if subject_ui != null:
+		subject_ui.visible = game_state != GameState.PLAYING
+
 	if game_state != GameState.PLAYING or current_mode != GameMode.CLASSIC:
 		perfect_count_label.visible = false
 		combo_label.visible = false
@@ -1354,6 +1843,11 @@ func _refresh_ui() -> void:
 		state_label.text = _t("state_race_over") if current_mode == GameMode.RACE else _t("state_game_over")
 	elif current_mode == GameMode.CLASSIC and feedback_timer > 0.0 and feedback_text != "":
 		state_label.text = feedback_text
+	elif current_mode == GameMode.VERTICAL_TRAIN and game_state == GameState.PLAYING:
+		state_label.text = "MI: %s    " % mi_display_label
+	elif current_mode == GameMode.VERTICAL_TRAIN_OFFLINE and game_state == GameState.PLAYING:
+		var pn: Array[String] = ["START", "MI TASK", "JUMP", "SCORE", "RELAX"]
+		state_label.text = pn[clampi(offline_train.phase, 0, 4)]
 	elif current_control_mode == ControlMode.MI:
 		if game_state == GameState.PLAYING:
 			var mi_state_key: String = "state_mi_idle"
@@ -1373,3 +1867,8 @@ func _refresh_ui() -> void:
 		state_label.text = _t("state_charging") % (player.charge_ratio() * 100.0)
 	else:
 		state_label.text = _t("state_idle")
+
+	if level_mode != null:
+		level_mode.update_hud()
+	if offline_train != null:
+		offline_train.update_hud()

@@ -1,0 +1,36 @@
+{
+  "fs": 250.0,
+  "onset_s": 2.0,
+  "window_s": 4.0,
+  "n_trials": 10,
+  "accuracy": 0.8,
+  "channels": [
+    "PO3",
+    "O1",
+    "Fp2",
+    "Fp1",
+    "T7",
+    "T8",
+    "PO4",
+    "O2"
+  ],
+  "used_channels": [
+    "T7",
+    "T8"
+  ],
+  "t7_idx": 4,
+  "t8_idx": 5,
+  "method": "ERD/ERS — (task−baseline)/baseline",
+  "feature_names": [
+    "ERD_T7",
+    "ERD_T8",
+    "lateral",
+    "ERD_alpha_T7",
+    "ERD_alpha_T8",
+    "lateral_alpha",
+    "ERD_beta_T7",
+    "ERD_beta_T8",
+    "lateral_beta"
+  ],
+  "note": "No bandpass filter; broadband + alpha + beta ERD"
+}

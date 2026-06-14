@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bxbiorwpbtbtr" path="res://scripts/Game.gd" id="1_gm"]
 [ext_resource type="PackedScene" uid="uid://bevcd1f6y0g1h" path="res://scenes/Player.tscn" id="2_pl"]
+[ext_resource type="Script" path="res://scripts/PlatformMinimap.gd" id="3_pm"]
 
 [sub_resource type="SystemFont" id="SystemFont_UI"]
 font_names = PackedStringArray("PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", "Arial", "Noto Sans")
@@ -336,6 +337,21 @@ theme_override_styles/focus = SubResource("StyleBoxFlat_ControlFocus")
 text = "Player"
 placeholder_text = "Player name"
 max_length = 16
+
+[node name="PlatformMinimap" type="Control" parent="HUD" unique_id=1487762345]
+anchors_preset = 0
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 0.0
+anchor_bottom = 0.0
+offset_left = 12.0
+offset_top = 108.0
+offset_right = 232.0
+offset_bottom = 328.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("3_pm")
 
 [node name="RecordsTitle" type="Label" parent="HUD" unique_id=471741591]
 offset_left = 24.0
