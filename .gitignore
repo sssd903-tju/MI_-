@@ -1,3 +1,23 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Python
+__pycache__/
+*.pyc
+*.pkl
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.claude/
+
+# Godot
+.godot/
+*.uid
