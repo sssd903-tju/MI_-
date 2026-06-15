@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FP1/FP2 前额叶 MI 在线推理 — LSL → FAA特征 → RF分类 → WebSocket
+"""FP1/FP2 前额叶 MI 在线推理 — LSL → Temporal FAA(8d) → SVM-RBF → WebSocket
 
 Usage:
     python fp1fp2_online.py [--port 8767] --model models/fp1fp2_model
@@ -34,8 +34,7 @@ FP1_IDX, FP2_IDX = 4, 5
 BUFFER_N = 1000  # 4s @ 250Hz
 LSL_STREAM = "brain-cube-eeg"
 
-# ── FAA+Power 特征提取 (18维) ──
-BANDS_18 = {"theta":(4,8),"alpha":(8,13),"low_beta":(13,20),"high_beta":(20,30),"beta":(13,30),"broadband":(0.5,30)}
+# ── Temporal FAA 特征提取 (8维) ──
 
 def extract_8d(fp1_tk, fp2_tk):
     """Temporal FAA: α/β × 4子窗(500ms) = 8维 (68.6% LOO, 70trial)"""

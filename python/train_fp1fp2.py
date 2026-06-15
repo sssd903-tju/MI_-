@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-离线训练: BDF + JSONL → 30维 FAA 特征 → SVM/RF/LDA 模型
+离线训练: BDF + JSONL → Temporal FAA(8d) 特征 → SVM-RBF 模型
 
 Usage:
     python train_fp1fp2.py \\
